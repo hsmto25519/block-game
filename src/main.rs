@@ -3,6 +3,15 @@ use std::cmp::max;
 use ::rand::thread_rng;
 use ::rand::Rng;
 
+const WINDOW_WIDTH: i32  = 1280;
+const WINDOW_HEIGHT: i32 = 960;
+
+const GAME_WIDTH: usize = 7;  // Your grid width
+const GAME_HEIGHT: usize = 10; // Your grid height
+
+const LEVEL_THRESHOLD_SCORE: usize = 30;
+const UPPER_LEVEL: usize = 15;
+
 // --- Game Logic Copied From Your Original Code ---
 
 #[derive(Clone, Copy)]
@@ -10,9 +19,6 @@ struct Block {
     x: usize,
     y: usize,
 }
-
-const LEVEL_THRESHOLD_SCORE: usize = 10;
-const UPPER_LEVEL: usize = 15;
 
 /// Moves all blocks down by one row.
 fn move_blocks(blocks: &mut Vec<Block>) {
@@ -59,8 +65,8 @@ fn detect_collision(blocks: &[Block], player_x: usize, height: usize) -> bool {
 fn window_conf() -> Conf {
     Conf {
         window_title: "Block Dodger".to_string(),
-        window_width: 640,  // Window width in pixels
-        window_height: 480, // Window height in pixels
+        window_width: WINDOW_WIDTH,  // Window width in pixels
+        window_height: WINDOW_HEIGHT, // Window height in pixels
         ..Default::default()
     }
 }
@@ -68,8 +74,6 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     // ---- Game setup ----
-    const GAME_WIDTH: usize = 20;  // Your grid width
-    const GAME_HEIGHT: usize = 10; // Your grid height
     let mut player_x = GAME_WIDTH / 2;
     let mut blocks: Vec<Block> = Vec::new();
     let mut score = 0;
@@ -99,7 +103,7 @@ async fn main() {
 
             // 2. Update Game State (runs on a timer, not every frame)
             let level = (score / LEVEL_THRESHOLD_SCORE).min(UPPER_LEVEL) as u64;
-            let current_speed_s = max(250 - (level * 20), 1) as f64 / 1000.0;
+            let current_speed_s = max(200 - (level * 10), 1) as f64 / 1000.0;
 
             if get_time() - last_update > current_speed_s {
                 last_update = get_time(); // Reset timer
