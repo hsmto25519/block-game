@@ -1,0 +1,10 @@
+[package]
+name = "block-game"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# tokio = { version = "1.43", features = ["full"] }
+# crossterm = "0.28"
+rand = "0.8"
+macroquad = "0.4"

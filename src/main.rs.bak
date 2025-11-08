@@ -1,0 +1,186 @@
+use std::io::{stdout, Write};
+use std::time::Duration;
+use std::cmp::max;
+use rand::Rng;
+use tokio::sync::mpsc;
+// Import sleep, remove interval and MissedTickBehavior
+use tokio::time::sleep;
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    terminal, ExecutableCommand,
+};
+
+#[derive(Clone, Copy)]
+struct Block {
+    x: usize,
+    y: usize,
+}
+
+const LEVEL_THRESHOLD_SCORE: usize = 10;
+const UPPER_LEVEL: usize = 15;
+
+/// Spawns a separate async task to listen for keyboard input.
+fn start_input_listener(tx: mpsc::Sender<KeyCode>) {
+    tokio::spawn(async move {
+        loop {
+            if event::poll(Duration::from_millis(10)).unwrap() {
+                if let Event::Key(key_event) = event::read().unwrap() {
+                    tx.send(key_event.code).await.ok();
+                }
+            }
+        }
+    });
+}
+
+/// Reads and applies player movement input.
+async fn handle_input(
+    player_x: &mut usize,
+    width: usize,
+    rx: &mut mpsc::Receiver<KeyCode>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    while let Ok(key) = rx.try_recv() {
+        match key {
+            KeyCode::Left if *player_x > 0 => *player_x -= 1,
+            KeyCode::Right if *player_x < width - 1 => *player_x += 1,
+            KeyCode::Esc => {
+                terminal::disable_raw_mode()?;
+                // Use \r\n for a clean exit line
+                println!("\r\nGame exited.");
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Moves all blocks down by one row.
+fn move_blocks(blocks: &mut Vec<Block>) {
+    for b in blocks.iter_mut() {
+        b.y += 1;
+    }
+    blocks.retain(|b| b.y < 10); // remove off-screen blocks
+}
+
+/// Randomly spawns a new block at the top.
+fn spawn_block(blocks: &mut Vec<Block>, width: usize, score: usize) {
+    let mut rng = rand::thread_rng();
+    // Level 0-9
+    let level = (score / LEVEL_THRESHOLD_SCORE).min(UPPER_LEVEL);
+    
+    // Spawn chance increases from 0.3 (30%) to 0.66 (66%)
+    let spawn_chance = 0.3 + (level as f32 * 0.04); 
+    
+    // Max blocks to spawn this tick. Increases from 1 up to 4.
+    // eg.
+    // level 0 (score 0)   -> 1 + 0 = 1
+    // level 3 (score 300) -> 1 + 1 = 2
+    // level 6 (score 600) -> 1 + 2 = 3
+    // level 9 (score 900) -> 1 + 3 = 4
+    let max_spawns = 1 + (level / 3);
+
+    for _ in 0..max_spawns {
+        if rng.r#gen::<f32>() < spawn_chance {
+            blocks.push(Block {
+                x: rng.gen_range(0..width),
+                y: 0,
+            });
+        }
+    }
+}
+
+/// Checks if any block hits the player position.
+fn detect_collision(blocks: &[Block], player_x: usize, height: usize) -> bool {
+    blocks.iter().any(|b| b.x == player_x && b.y == height - 1)
+}
+
+/// Clears and redraws the game field.
+fn draw_frame(
+    stdout: &mut std::io::Stdout,
+    width: usize,
+    height: usize,
+    player_x: usize,
+    blocks: &[Block],
+    score: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    stdout.execute(cursor::MoveTo(0, 0))?;
+    stdout.execute(terminal::Clear(terminal::ClearType::All))?;
+
+    for y in 0..height {
+        for x in 0..width {
+            let char = if y == height - 1 && x == player_x {
+                "@"
+            } else if blocks.iter().any(|b| b.x == x && b.y == y) {
+                "#"
+            } else {
+                "."
+            };
+            // Use write! to write to the stdout handle
+            write!(stdout, "{}", char)?;
+        }
+        // Manually write a carriage return and newline
+        write!(stdout, "\r\n")?;
+    }
+    // Calculate level 1-10 for display
+    let level = (score / LEVEL_THRESHOLD_SCORE).min(UPPER_LEVEL) + 1;
+    // Write the score and level to the stdout handle
+    write!(stdout, "Score: {} | Level: {}\r\n", score, level)?;
+    write!(stdout, "press 'esc' to finish the game\r\n")?;
+    
+    // Flush the stdout handle to ensure everything is drawn
+    stdout.flush()?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ---- Game setup ----
+    let width = 20;
+    let height = 10;
+    let mut player_x = width / 2;
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut score = 0;
+
+    let (tx, mut rx) = mpsc::channel(32);
+    start_input_listener(tx);
+
+    let mut stdout = stdout();
+    terminal::enable_raw_mode()?;
+    stdout.execute(terminal::Clear(terminal::ClearType::All))?;
+
+    // Remove the ticker, we will use tokio::time::sleep instead
+    // let mut ticker = interval(Duration::from_millis(250));
+    // ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    // ---- Game loop ----
+    println!("\r\nplay it: 1, quit: 'esc'");
+    loop {
+        handle_input(&mut player_x, width, &mut rx).await?;
+
+        move_blocks(&mut blocks);
+        // Pass score to spawn_block to calculate spawn rate
+        spawn_block(&mut blocks, width, score);
+        if detect_collision(&blocks, player_x, height) {
+            break;
+        }
+
+        score += 1;
+        draw_frame(&mut stdout, width, height, player_x, &blocks, score)?;
+
+        // --- Speed logic ---
+        // Calculate level (0-UPPER_LEVEL)
+        let level = (score / LEVEL_THRESHOLD_SCORE).min(UPPER_LEVEL) as u64; 
+        // Speed increases from 250ms down to 70ms (250 - 9*20)
+        let current_speed_ms = max(250 - (level * 20), 1);
+        
+        // Replace ticker.tick().await with sleep
+        sleep(Duration::from_millis(current_speed_ms)).await;
+    }
+
+    terminal::disable_raw_mode()?;
+    // Use \r\n for a clean "Game Over" message
+    println!("\r\n💥 Game Over! Final Score: {}", score);
+
+    Ok(())
+}
